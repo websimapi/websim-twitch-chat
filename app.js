@@ -1,4 +1,4 @@
-import * as tmi from 'tmi.js';
+import { Client } from 'tmi.js'; // Use named import
 import { config } from './config.js';
 
 // --- DOM Elements ---
@@ -102,7 +102,7 @@ function addChatMessage(username, message, tags) {
     chatMessages.scrollTop = chatMessages.scrollHeight;
 
     // Limit number of messages displayed in chat window
-     while (chatMessages.children.length > config.maxMessagesInChat) {
+    while (chatMessages.children.length > config.maxMessagesInChat) {
         chatMessages.removeChild(chatMessages.firstChild);
     }
 }
@@ -170,16 +170,21 @@ function connectToTwitch(channel) {
         return;
     }
 
+    console.log(`Attempting to connect to channel: ${channel}`); // Log attempt
     updateConnectionStatus('Connecting...', channel);
 
-    client = new tmi.Client({
-        options: { debug: false }, // Set to true for more logs
+    // Use the named import 'Client' and enable debugging
+    client = new Client({
+        options: { debug: true }, // Enable debug logs
         connection: {
             secure: true,
             reconnect: true
         },
         channels: [channel]
     });
+
+    // Clear previous listeners before adding new ones (important if reconnecting logic existed previously)
+    client.removeAllListeners(); // Good practice before adding listeners
 
     client.on('message', (target, context, msg, self) => {
         if (self) return; // Ignore messages from the bot itself if logged in
@@ -194,7 +199,7 @@ function connectToTwitch(channel) {
     });
 
     client.on('connected', (address, port) => {
-        console.log(`* Connected to ${address}:${port} in channel ${channel}`);
+        console.log(`* Connected event received: ${address}:${port} in channel ${channel}`);
         updateConnectionStatus('Connected', channel);
         // Clear previous chat messages on new connection
         chatMessages.innerHTML = '';
@@ -204,58 +209,73 @@ function connectToTwitch(channel) {
     });
 
     client.on('disconnected', (reason) => {
-        console.log(`* Disconnected from Twitch: ${reason || 'Unknown reason'}`);
+        console.log(`* Disconnected event received: ${reason || 'Unknown reason'}`);
         updateConnectionStatus('Disconnected');
         client = null; // Ensure client is reset
     });
 
     client.on('join', (target, username, self) => {
         if (self) return; // Ignore self join
-        console.log(`${username} joined the chat`);
+        console.log(`${username} joined the chat (join event)`);
         // Optionally add user to list immediately on join,
         // but current logic adds them on first message which is more robust for lurkers.
         // getOrCreateUser(username); // Uncomment if you want users added on join
     });
 
-     client.on('part', (target, username, self) => {
+    client.on('part', (target, username, self) => {
         if (self) return;
-         console.log(`${username} left the chat`);
-         // Optionally remove user from list on part, but current logic keeps history.
-         // If you want to remove them:
-         // const userListItem = userListElement.querySelector(`li[data-username="${username}"]`);
-         // if (userListItem) {
-         //     userListItem.remove();
-         // }
-         // delete users[username]; // Also remove from data store if desired
-         // saveUsersToStorage();
-     });
+        console.log(`${username} left the chat (part event)`);
+        // Optionally remove user from list on part, but current logic keeps history.
+    });
+
+    // Log before attempting connection
+    console.log('Calling client.connect()...');
 
     client.connect().catch(err => {
-        console.error('Connection error:', err);
+        // This catch block handles errors during the *initial* connection attempt promise
+        console.error('Connection promise rejected:', err);
         updateConnectionStatus('Error connecting');
-        alert(`Failed to connect: ${err}`);
+        alert(`Failed to connect: ${err}`); // Show error to user
         client = null; // Reset client on failed connection
+    });
+
+    // It's also good practice to listen for the 'connectfail' event which tmi.js might emit
+    client.on('connectfail', (err) => {
+        console.error('Connect fail event:', err);
+        updateConnectionStatus('Connection Failed');
+        // alert might be redundant if connect().catch() already fired
+    });
+
+    // Handle websocket errors after connection is established
+    client.on('websocketerror', (err) => {
+        console.error('WebSocket error:', err);
+        // You might want to update status or attempt reconnect here depending on the error
+        updateConnectionStatus('Error (WebSocket)');
     });
 }
 
 function disconnectFromTwitch() {
     if (client && client.readyState() === 'OPEN') {
+        console.log('Calling client.disconnect()...');
         updateConnectionStatus('Disconnecting...');
         client.disconnect()
             .then(() => {
-                console.log('Successfully disconnected.');
-                updateConnectionStatus('Disconnected');
+                console.log('Disconnect promise resolved.');
+                updateConnectionStatus('Disconnected'); // Status should be updated by 'disconnected' event, but good backup
                 client = null;
             })
             .catch(err => {
-                console.error('Error during disconnection:', err);
+                console.error('Error during disconnection promise:', err);
                 // Force update status even if disconnect promise fails
                 updateConnectionStatus('Disconnected (error)');
                 client = null; // Still reset client
             });
     } else {
         console.log('Not connected, cannot disconnect.');
-         // Ensure UI reflects disconnected state if somehow out of sync
+        // Ensure UI reflects disconnected state if somehow out of sync
+        if (client) {
+            console.log(`Client state was: ${client.readyState()}`);
+        }
         updateConnectionStatus('Disconnected');
         client = null;
     }
@@ -263,9 +283,15 @@ function disconnectFromTwitch() {
 
 // --- Event Listeners ---
 connectButton.addEventListener('click', () => {
+    console.log('Connect/Disconnect button clicked.'); // Log button click
     if (client && client.readyState() === 'OPEN') {
         disconnectFromTwitch();
     } else {
+        // Ensure we don't try connecting if client exists but is in a connecting/disconnecting state
+        if (client && client.readyState() !== 'CLOSED') {
+            console.warn(`Connect clicked while client state is ${client.readyState()}. Ignoring.`);
+            return;
+        }
         const channel = channelInput.value.trim() || config.defaultChannel;
         if (channel) {
             connectToTwitch(channel.toLowerCase()); // Twitch channels are lowercase
@@ -277,7 +303,7 @@ connectButton.addEventListener('click', () => {
 
 channelInput.addEventListener('keypress', (e) => {
     if (e.key === 'Enter') {
-       connectButton.click(); // Trigger connect/disconnect on Enter
+        connectButton.click(); // Trigger connect/disconnect on Enter
     }
 });
 
@@ -295,4 +321,4 @@ loadUsersFromStorage(); // Load any persisted user data on startup
 channelInput.value = config.defaultChannel; // Set default channel in input
 updateConnectionStatus('Disconnected'); // Set initial status
 
-console.log('Twitch Chat App Initialized');
+console.log('Twitch Chat App Initialized - Ready'); // More specific init message
