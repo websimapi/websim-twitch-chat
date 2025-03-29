@@ -1,4 +1,4 @@
-import tmi from 'tmi.js';
+import * as tmi from 'tmi.js';
 import { config } from './config.js';
 
 // --- DOM Elements ---
@@ -296,4 +296,3 @@ channelInput.value = config.defaultChannel; // Set default channel in input
 updateConnectionStatus('Disconnected'); // Set initial status
 
 console.log('Twitch Chat App Initialized');
-
